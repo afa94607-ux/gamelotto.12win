@@ -1107,6 +1107,8 @@ export default function App() {
             key={authenticatedPlayer.id}
             playerUsername={authenticatedPlayer.username}
             records={recentBetRecords}
+            history={history}
+            currentCambodiaDate={cambodiaToday}
             onBackToGame={() => setActiveSubTab('lottery')}
           />
         ) : activeSubTab === 'results' ? (

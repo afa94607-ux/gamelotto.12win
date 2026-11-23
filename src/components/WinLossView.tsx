@@ -1,21 +1,36 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { BetHistoryRecord, OwnerLottery12Report } from '../types';
-import { TrendingUp, TrendingDown, Award, RefreshCw, Clock, Layers, ShieldCheck } from 'lucide-react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { BetHistoryRecord, DrawResult, OwnerLottery12Report } from '../types';
+import { TrendingUp, TrendingDown, Award, RefreshCw, Clock, Layers, ShieldCheck, Calendar } from 'lucide-react';
 import { buildAuthHeaders } from '../utils/realtimeSync';
 import { apiUrl } from '../utils/apiConfig';
+import {
+  WinLossFilterMode,
+  getCambodiaDateKey,
+  parseDateKey,
+  getDaysInMonth,
+  buildDateKey,
+  pad2,
+  computeFilteredWinLossReport,
+} from '../utils/winLossFilter';
 
 interface WinLossViewProps {
   playerUsername?: string;
   records: BetHistoryRecord[];
+  history?: DrawResult[];
+  currentCambodiaDate?: string;
   onBackToGame: () => void;
 }
 
 export const WinLossView: React.FC<WinLossViewProps> = ({
   playerUsername,
   records,
+  history = [],
+  currentCambodiaDate,
   onBackToGame,
 }) => {
-  const [period, setPeriod] = useState<'all' | 'today' | '7d'>('all');
+  const todayKey = currentCambodiaDate || getCambodiaDateKey(Date.now());
+  const [filterMode, setFilterMode] = useState<WinLossFilterMode>('all');
+  const [selectedDateKey, setSelectedDateKey] = useState<string>(todayKey);
   const [loading, setLoading] = useState<boolean>(false);
   const [report, setReport] = useState<OwnerLottery12Report | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -39,7 +54,8 @@ export const WinLossView: React.FC<WinLossViewProps> = ({
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(apiUrl(`/api/lottery12/win-loss?period=${encodeURIComponent(period)}`), {
+      // Always fetch authoritative all-time report from backend; period filtering uses exact Cambodia calendar-day boundaries
+      const res = await fetch(apiUrl('/api/lottery12/win-loss?period=all'), {
         headers: buildAuthHeaders(false),
         credentials: 'include',
         cache: 'no-store',
@@ -64,7 +80,7 @@ export const WinLossView: React.FC<WinLossViewProps> = ({
         setLoading(false);
       }
     }
-  }, [period, playerUsername]);
+  }, [playerUsername]);
 
   // Clear any previous player's cached report immediately whenever the active player changes
   useEffect(() => {
@@ -78,8 +94,40 @@ export const WinLossView: React.FC<WinLossViewProps> = ({
     return () => controller.abort();
   }, [fetchLottery12WinLoss, recordsSignature]);
 
-  const summary = report?.summary;
-  const completedRounds = report?.byRound ?? [];
+  const effectiveTodayKey = report?.serverDate && !currentCambodiaDate ? report.serverDate : todayKey;
+  const { year: selYear, month: selMonth, day: selDay } = parseDateKey(selectedDateKey);
+  const maxDayInMonth = getDaysInMonth(selYear, selMonth);
+
+  const yearOptions = useMemo(() => {
+    const currentYear = parseDateKey(effectiveTodayKey).year;
+    const years: number[] = [];
+    for (let y = currentYear - 2; y <= currentYear + 1; y++) {
+      years.push(y);
+    }
+    if (!years.includes(selYear)) years.push(selYear);
+    return years.sort((a, b) => b - a);
+  }, [effectiveTodayKey, selYear]);
+
+  const handleDatePartChange = (nextYear: number, nextMonth: number, nextDay: number) => {
+    const clampedKey = buildDateKey(nextYear, nextMonth, nextDay);
+    setSelectedDateKey(clampedKey);
+    setFilterMode('custom');
+  };
+
+  const filteredReport = useMemo(
+    () =>
+      computeFilteredWinLossReport({
+        records,
+        history,
+        serverReport: report,
+        filterMode,
+        todayKey: effectiveTodayKey,
+        selectedDateKey,
+      }),
+    [records, history, report, filterMode, effectiveTodayKey, selectedDateKey]
+  );
+
+  const completedRounds = filteredReport.byRound;
 
   return (
     <div className="flex-1 bg-slate-50 p-4 overflow-y-auto">
@@ -102,14 +150,66 @@ export const WinLossView: React.FC<WinLossViewProps> = ({
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <select
-            value={period}
-            onChange={(e) => setPeriod(e.target.value as 'all' | 'today' | '7d')}
+            aria-label="ជ្រើសរើសរយៈពេល (Quick Date Filter)"
+            data-testid="winloss-period-select"
+            value={filterMode}
+            onChange={(e) => setFilterMode(e.target.value as WinLossFilterMode)}
             className="px-3 py-2 border border-slate-300 rounded bg-white text-slate-700 font-semibold text-xs shadow-xs"
           >
-            <option value="all">គ្រប់ពេលទាំងអស់ (All Time)</option>
             <option value="today">ថ្ងៃនេះ (Today)</option>
+            <option value="yesterday">ម្សិលមិញ (Yesterday)</option>
             <option value="7d">៧ ថ្ងៃចុងក្រោយ (Last 7 Days)</option>
+            <option value="1m">១ ខែចុងក្រោយ (Last 1 Month)</option>
+            <option value="all">គ្រប់ពេលទាំងអស់ (All Time)</option>
+            <option value="custom">តាមថ្ងៃជាក់លាក់ (Selected Date)</option>
           </select>
+
+          {/* Compact Year / Month / Day Selector */}
+          <div className="flex items-center gap-1 bg-white border border-slate-300 rounded px-2 py-1 shadow-xs text-xs">
+            <Calendar className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+            <select
+              aria-label="ឆ្នាំ (Year)"
+              data-testid="winloss-year-select"
+              value={selYear}
+              onChange={(e) => handleDatePartChange(Number(e.target.value), selMonth, selDay)}
+              className="bg-transparent font-semibold text-slate-700 focus:outline-none cursor-pointer"
+            >
+              {yearOptions.map((y) => (
+                <option key={y} value={y}>
+                  {y}
+                </option>
+              ))}
+            </select>
+            <span className="text-slate-400">/</span>
+            <select
+              aria-label="ខែ (Month)"
+              data-testid="winloss-month-select"
+              value={selMonth}
+              onChange={(e) => handleDatePartChange(selYear, Number(e.target.value), selDay)}
+              className="bg-transparent font-semibold text-slate-700 focus:outline-none cursor-pointer"
+            >
+              {Array.from({ length: 12 }, (_, idx) => idx + 1).map((m) => (
+                <option key={m} value={m}>
+                  ខែ {pad2(m)}
+                </option>
+              ))}
+            </select>
+            <span className="text-slate-400">/</span>
+            <select
+              aria-label="ថ្ងៃ (Day)"
+              data-testid="winloss-day-select"
+              value={selDay}
+              onChange={(e) => handleDatePartChange(selYear, selMonth, Number(e.target.value))}
+              className="bg-transparent font-semibold text-slate-700 focus:outline-none cursor-pointer"
+            >
+              {Array.from({ length: maxDayInMonth }, (_, idx) => idx + 1).map((d) => (
+                <option key={d} value={d}>
+                  ថ្ងៃ {pad2(d)}
+                </option>
+              ))}
+            </select>
+          </div>
+
           <button
             type="button"
             onClick={() => fetchLottery12WinLoss()}
@@ -143,8 +243,13 @@ export const WinLossView: React.FC<WinLossViewProps> = ({
             (គណនាតែការភ្នាល់ឆ្នោត #12 ដែលបានទូទាត់រួចប៉ុណ្ណោះ — មិនរាប់បញ្ចូលការដាក់ប្រាក់ ឬការភ្នាល់ដែលត្រូវបានលុបចោលឡើយ)
           </span>
         </div>
-        <span className="font-mono font-bold text-blue-700">
-          Settled Rounds: {summary?.totalSettledRounds ?? 0} | Valid Bets: {summary?.totalValidBets ?? 0}
+        <span className="font-mono font-bold text-blue-700" data-testid="winloss-range-summary">
+          {filteredReport.startKey
+            ? filteredReport.startKey === filteredReport.endKey
+              ? `${filteredReport.startKey} | `
+              : `${filteredReport.startKey} → ${filteredReport.endKey} | `
+            : 'All Time | '}
+          Settled Rounds: {filteredReport.totalSettledRounds} | Valid Bets: {filteredReport.totalValidBets}
         </span>
       </div>
 
@@ -157,7 +262,7 @@ export const WinLossView: React.FC<WinLossViewProps> = ({
           <div>
             <div className="text-[11px] text-slate-500 font-medium">ប្រាក់ភ្នាល់សុពលភាព (Valid Stakes)</div>
             <div className="text-base font-bold text-slate-800 font-mono" data-testid="owner-total-stakes">
-              {formatKHR(summary?.totalValidStakes ?? 0)}
+              {formatKHR(filteredReport.totalValidStakes)}
             </div>
           </div>
         </div>
@@ -169,7 +274,7 @@ export const WinLossView: React.FC<WinLossViewProps> = ({
           <div>
             <div className="text-[11px] text-slate-500 font-medium">ប្រាក់ទូទាត់សរុប (Total Payouts)</div>
             <div className="text-base font-bold text-amber-700 font-mono" data-testid="owner-total-payouts">
-              {formatKHR(summary?.totalPayouts ?? 0)}
+              {formatKHR(filteredReport.totalPayouts)}
             </div>
           </div>
         </div>
@@ -181,7 +286,7 @@ export const WinLossView: React.FC<WinLossViewProps> = ({
           <div>
             <div className="text-[11px] text-slate-500 font-medium">ប្រាក់ចំណេញម្ចាស់ (Owner Profit)</div>
             <div className="text-base font-bold text-emerald-600 font-mono" data-testid="owner-gross-profit">
-              {formatKHR(summary?.totalOwnerProfit ?? 0)}
+              {formatKHR(filteredReport.totalOwnerProfit)}
             </div>
           </div>
         </div>
@@ -193,7 +298,7 @@ export const WinLossView: React.FC<WinLossViewProps> = ({
           <div>
             <div className="text-[11px] text-slate-500 font-medium">ប្រាក់ខាតម្ចាស់ (Owner Loss)</div>
             <div className="text-base font-bold text-rose-600 font-mono" data-testid="owner-gross-loss">
-              {formatKHR(summary?.totalOwnerLoss ?? 0)}
+              {formatKHR(filteredReport.totalOwnerLoss)}
             </div>
           </div>
         </div>
@@ -201,12 +306,12 @@ export const WinLossView: React.FC<WinLossViewProps> = ({
         <div className="bg-white p-3 rounded-lg border border-slate-200 shadow-xs flex items-center gap-3">
           <div
             className={`p-2.5 rounded-full shrink-0 ${
-              (summary?.netOwnerProfitLoss ?? 0) >= 0
+              filteredReport.netOwnerProfitLoss >= 0
                 ? 'bg-emerald-50 text-emerald-600'
                 : 'bg-rose-50 text-rose-600'
             }`}
           >
-            {(summary?.netOwnerProfitLoss ?? 0) >= 0 ? (
+            {filteredReport.netOwnerProfitLoss >= 0 ? (
               <TrendingUp className="w-5 h-5" />
             ) : (
               <TrendingDown className="w-5 h-5" />
@@ -217,10 +322,10 @@ export const WinLossView: React.FC<WinLossViewProps> = ({
             <div
               data-testid="owner-net-profit-loss"
               className={`text-base font-bold font-mono ${
-                (summary?.netOwnerProfitLoss ?? 0) >= 0 ? 'text-emerald-600' : 'text-rose-600'
+                filteredReport.netOwnerProfitLoss >= 0 ? 'text-emerald-600' : 'text-rose-600'
               }`}
             >
-              {formatSignedKHR(summary?.netOwnerProfitLoss ?? 0)}
+              {formatSignedKHR(filteredReport.netOwnerProfitLoss)}
             </div>
           </div>
         </div>
