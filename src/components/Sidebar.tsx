@@ -7,6 +7,7 @@ interface SidebarProps {
   activeBetsTotal: number;
   latestResults: DrawResult[];
   recentBets: BetHistoryRecord[];
+  currentCambodiaDate?: string;
   onRefreshResults: () => void;
   onClearBetsHistory?: () => void;
 }
@@ -17,6 +18,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   activeBetsTotal,
   latestResults,
   recentBets,
+  currentCambodiaDate,
   onRefreshResults,
   onClearBetsHistory,
 }) => {
@@ -40,21 +42,26 @@ export const Sidebar: React.FC<SidebarProps> = ({
     }
   };
 
-  // Deduplicate by ID and keep newest betting records at the top
-  const orderedBets = React.useMemo(() => {
+  // Deduplicate by ID, keep newest betting records at the top, and show only current Cambodia day
+  const activeCambodiaDate = currentCambodiaDate || formatCambodiaDay(Date.now()) || '';
+
+  const todaysBets = React.useMemo(() => {
     const seen = new Set<string>();
     const unique: BetHistoryRecord[] = [];
     for (const b of recentBets) {
       if (!b?.id || seen.has(b.id)) continue;
       seen.add(b.id);
-      unique.push(b);
+      const betDay = formatCambodiaDay(b.placedTimestamp || b.settledTimestamp);
+      if (betDay === activeCambodiaDate) {
+        unique.push(b);
+      }
     }
     return unique.sort((a, b) => {
       const ta = a.placedTimestamp || a.settledTimestamp || 0;
       const tb = b.placedTimestamp || b.settledTimestamp || 0;
       return tb - ta;
     });
-  }, [recentBets]);
+  }, [recentBets, activeCambodiaDate]);
 
   return (
     <div className="w-full lg:w-[290px] xl:w-[320px] bg-white border-r border-[#94a3b8] flex flex-col select-none text-sm">
@@ -175,13 +182,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <div className="flex items-center justify-between px-3.5 py-2 bg-[#e2e8f0] text-slate-800 font-extrabold border-y border-[#cbd5e1] mt-2">
           <div className="flex items-center gap-2">
             <span className="text-sm sm:text-base">ប្រវត្តិភ្នាល់</span>
-            <span className="bg-white text-blue-700 px-2 py-0.5 rounded text-xs font-bold border border-slate-300">
-              {orderedBets.length}
+            <span
+              data-testid="betting-history-count"
+              className="bg-white text-blue-700 px-2 py-0.5 rounded text-xs font-bold border border-slate-300"
+            >
+              {todaysBets.length}
             </span>
             <span className="text-slate-500 text-xs font-medium">(History)</span>
           </div>
           <div className="flex items-center gap-2">
-            {recentBets.length > 0 && onClearBetsHistory && (
+            {todaysBets.length > 0 && onClearBetsHistory && (
               <button
                 type="button"
                 onClick={onClearBetsHistory}
@@ -209,20 +219,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
           data-testid="betting-history-list"
           className="divide-y divide-slate-100 bg-white max-h-[320px] overflow-y-auto overscroll-contain scrollbar-thin"
         >
-          {orderedBets.length === 0 ? (
-            <div className="p-4 text-center text-slate-400 text-sm italic">
-              មិនទាន់មានប្រវត្តិភ្នាល់នៅឡើយទេ
+          {todaysBets.length === 0 ? (
+            <div data-testid="betting-history-empty" className="p-4 text-center text-slate-400 text-sm italic">
+              មិនទាន់មានប្រវត្តិភ្នាល់ថ្ងៃនេះទេ (No bets today.)
             </div>
           ) : (
-            orderedBets.map((bet, index) => {
-              const currentDay = formatCambodiaDay(bet.placedTimestamp || bet.settledTimestamp);
-              const prevDay =
-                index > 0
-                  ? formatCambodiaDay(
-                      orderedBets[index - 1].placedTimestamp || orderedBets[index - 1].settledTimestamp
-                    )
-                  : null;
-              const showDayHeader = Boolean(currentDay && currentDay !== prevDay);
+            todaysBets.map((bet) => {
               const primaryBet = bet.bets[0];
               const betLabel = bet.bets.map((b) => b.label).join(', ') || 'ការភ្នាល់';
               const potentialWin =
@@ -230,16 +232,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 (primaryBet?.potentialWin ?? Math.round(bet.totalStake * (primaryBet?.odds || 1.95)));
 
               return (
-                <React.Fragment key={bet.id}>
-                  {showDayHeader && (
-                    <div className="px-3.5 py-1 bg-slate-50 text-[11px] font-bold text-slate-500 border-b border-slate-100 sticky top-0 z-10">
-                      {currentDay}
-                    </div>
-                  )}
-                  <div
-                    data-testid="betting-history-item"
-                    className="p-3 flex flex-col gap-1.5 text-xs hover:bg-slate-50 transition-colors"
-                  >
+                <div
+                  key={bet.id}
+                  data-testid="betting-history-item"
+                  className="p-3 flex flex-col gap-1.5 text-xs hover:bg-slate-50 transition-colors"
+                >
                   {/* Top Row: Round ID, Time & Status */}
                   <div className="flex justify-between items-center">
                     <div className="flex items-center gap-1.5">
@@ -303,8 +300,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       )}
                     </div>
                   </div>
-                  </div>
-                </React.Fragment>
+                </div>
               );
             })
           )}

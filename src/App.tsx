@@ -198,7 +198,22 @@ export default function App() {
   const [isHowItWorksOpen, setIsHowItWorksOpen] = useState<boolean>(false);
   const lastServerTickRef = useRef<number>(Date.now());
   const roundEndTimestampRef = useRef<number>(Date.now() + 180000);
+  const getCambodiaDateKey = (ts: number) => {
+    try {
+      return new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Phnom_Penh',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      }).format(new Date(ts));
+    } catch {
+      return new Date(ts).toISOString().slice(0, 10);
+    }
+  };
+
   const serverOffsetMsRef = useRef<number>(0);
+  const [cambodiaToday, setCambodiaToday] = useState<string>(() => getCambodiaDateKey(Date.now()));
+  const cambodiaTodayRef = useRef<string>(cambodiaToday);
   const hasServerClockRef = useRef<boolean>(false);
   const isRevealingRef = useRef<boolean>(false);
   const isRoundPausedRef = useRef<boolean>(false);
@@ -384,6 +399,11 @@ export default function App() {
 
     const authoritativeClockInterval = setInterval(() => {
       syncAuthoritativeAudioAndCountdown();
+      const nextCambodiaDay = getCambodiaDateKey(Date.now() + serverOffsetMsRef.current);
+      if (nextCambodiaDay !== cambodiaTodayRef.current) {
+        cambodiaTodayRef.current = nextCambodiaDay;
+        setCambodiaToday(nextCambodiaDay);
+      }
     }, 100);
 
     const unsubscribe = realtimeSync.subscribe((stateUpdate, eventType, rawMsg) => {
@@ -392,6 +412,11 @@ export default function App() {
 
       if (typeof stateUpdate.serverNow === 'number') {
         serverOffsetMsRef.current = stateUpdate.serverNow - Date.now();
+        const serverDay = getCambodiaDateKey(stateUpdate.serverNow);
+        if (serverDay !== cambodiaTodayRef.current) {
+          cambodiaTodayRef.current = serverDay;
+          setCambodiaToday(serverDay);
+        }
       }
       if (typeof stateUpdate.roundEndTimestamp === 'number') {
         roundEndTimestampRef.current = stateUpdate.roundEndTimestamp;
@@ -1147,6 +1172,7 @@ export default function App() {
                     activeBetsTotal={confirmedBetsTotal + pendingBetsTotal}
                     latestResults={history}
                     recentBets={recentBetRecords}
+                    currentCambodiaDate={cambodiaToday}
                     onRefreshResults={() => sound.playButton()}
                     onClearBetsHistory={handleClearBetHistory}
                   />
